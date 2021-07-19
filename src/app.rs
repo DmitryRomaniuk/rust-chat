@@ -1,46 +1,27 @@
 use log::*;
 use serde_derive::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
-use strum_macros::{EnumIter, ToString};
-use yew::format::Json;
 use yew::prelude::*;
-use yew::services::storage::{Area, StorageService};
-
-const KEY: &str = "yew.todomvc.self";
+use yew::services::dialog::DialogService;
+use web_sys::{Document, Location, window, MediaDevices};
 
 pub struct App {
     link: ComponentLink<Self>,
-    storage: StorageService,
     state: State,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct State {
-    entries: Vec<Entry>,
-    filter: Filter,
-    value: String,
-    edit_value: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Entry {
-    description: String,
-    completed: bool,
-    editing: bool,
+    hide_chat_mobile_view: bool,
+    enable_mic: bool,
+    enable_camera: bool,
 }
 
 pub enum Msg {
-    Add,
-    Edit(usize),
-    Update(String),
-    UpdateEdit(String),
-    Remove(usize),
-    SetFilter(Filter),
-    ToggleAll,
-    ToggleEdit(usize),
-    Toggle(usize),
-    ClearCompleted,
-    Nope,
+    OpenChat,
+    HideChat,
+    ToggleMic,
+    ToggleCamera,
+    InviteUser,
 }
 
 impl Component for App {
@@ -48,23 +29,14 @@ impl Component for App {
     type Properties = ();
 
     fn create(_: Self::Properties, link: ComponentLink<Self>) -> Self {
-        let storage = StorageService::new(Area::Local).unwrap();
-        let entries = {
-            if let Json(Ok(restored_entries)) = storage.restore(KEY) {
-                restored_entries
-            } else {
-                Vec::new()
-            }
-        };
         let state = State {
-            entries,
-            filter: Filter::All,
-            value: "".into(),
-            edit_value: "".into(),
+            hide_chat_mobile_view: true,
+            enable_mic: true,
+            enable_camera: true,
         };
+        
         App {
             link,
-            storage,
             state,
         }
     }
@@ -75,284 +47,121 @@ impl Component for App {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
-            Msg::Add => {
-                let entry = Entry {
-                    description: self.state.value.clone(),
-                    completed: false,
-                    editing: false,
-                };
-                self.state.entries.push(entry);
-                self.state.value = "".to_string();
+            Msg::OpenChat => {
+                self.state.hide_chat_mobile_view = false;
             }
-            Msg::Edit(idx) => {
-                let edit_value = self.state.edit_value.clone();
-                self.state.complete_edit(idx, edit_value);
-                self.state.edit_value = "".to_string();
+            Msg::HideChat => {
+                self.state.hide_chat_mobile_view = true;
             }
-            Msg::Update(val) => {
-                println!("Input: {}", val);
-                self.state.value = val;
+            Msg::ToggleMic => {
+                self.state.enable_mic = !self.state.enable_mic;
             }
-            Msg::UpdateEdit(val) => {
-                println!("Input: {}", val);
-                self.state.edit_value = val;
+            Msg::ToggleCamera => {
+                self.state.enable_camera = !self.state.enable_camera;
             }
-            Msg::Remove(idx) => {
-                self.state.remove(idx);
+            Msg::InviteUser => {
+                let href = location().href().expect("href unavailable");
+                
+                let message = "Copy this link and send it to people you want to meet with:";
+                DialogService::prompt(&message, Some(&href));
             }
-            Msg::SetFilter(filter) => {
-                self.state.filter = filter;
-            }
-            Msg::ToggleEdit(idx) => {
-                self.state.edit_value = self.state.entries[idx].description.clone();
-                self.state.toggle_edit(idx);
-            }
-            Msg::ToggleAll => {
-                let status = !self.state.is_all_completed();
-                self.state.toggle_all(status);
-            }
-            Msg::Toggle(idx) => {
-                self.state.toggle(idx);
-            }
-            Msg::ClearCompleted => {
-                self.state.clear_completed();
-            }
-            Msg::Nope => {}
         }
-        self.storage.store(KEY, Json(&self.state.entries));
         true
     }
 
     fn view(&self) -> Html {
         info!("rendered!");
-        html! {
-            <div class="todomvc-wrapper">
-                <section class="todoapp">
-                    <header class="header">
-                        <h1>{ "todos" }</h1>
-                        { self.view_input() }
-                    </header>
-                    <section class="main">
-                        <input class="toggle-all" type="checkbox" checked=self.state.is_all_completed() onclick=self.link.callback(|_| Msg::ToggleAll) />
-                        <ul class="todo-list">
-                            { for self.state.entries.iter().filter(|e| self.state.filter.fit(e))
-                                .enumerate()
-                                .map(|val| self.view_entry(val)) }
-                        </ul>
-                    </section>
-                    <footer class="footer">
-                        <span class="todo-count">
-                            <strong>{ self.state.total() }</strong>
-                            { " item(s) left" }
-                        </span>
-                        <ul class="filters">
-                            { for Filter::iter().map(|flt| self.view_filter(flt)) }
-                        </ul>
-                        <button class="clear-completed" onclick=self.link.callback(|_| Msg::ClearCompleted)>
-                            { format!("Clear completed ({})", self.state.total_completed()) }
-                        </button>
-                    </footer>
-                </section>
-                <footer class="info">
-                    <p>{ "Double-click to edit a todo" }</p>
-                    <p>{ "Written by " }<a href="https://github.com/DenisKolodin/" target="_blank">{ "Denis Kolodin" }</a></p>
-                    <p>{ "Part of " }<a href="http://todomvc.com/" target="_blank">{ "TodoMVC" }</a></p>
-                </footer>
-            </div>
-        }
-    }
-}
-
-impl App {
-    fn view_filter(&self, filter: Filter) -> Html {
-        let flt = filter.clone();
-
-        html! {
-            <li>
-                <a class=if self.state.filter == flt { "selected" } else { "not-selected" }
-                   href=&flt
-                   onclick=self.link.callback(move |_| Msg::SetFilter(flt.clone()))>
-                    { filter }
-                </a>
-            </li>
-        }
-    }
-
-    fn view_input(&self) -> Html {
-        html! {
-            // You can use standard Rust comments. One line:
-            // <li></li>
-            <input class="new-todo"
-                   placeholder="What needs to be done?"
-                   value=&self.state.value
-                   oninput=self.link.callback(|e: InputData| Msg::Update(e.value))
-                   onkeypress=self.link.callback(|e: KeyboardEvent| {
-                       if e.key() == "Enter" { Msg::Add } else { Msg::Nope }
-                   }) />
-            /* Or multiline:
-            <ul>
-                <li></li>
-            </ul>
-            */
-        }
-    }
-
-    fn view_entry(&self, (idx, entry): (usize, &Entry)) -> Html {
-        let mut class = "todo".to_string();
-        if entry.editing {
-            class.push_str(" editing");
-        }
-        if entry.completed {
-            class.push_str(" completed");
-        }
-
-        html! {
-            <li class=class>
-                <div class="view">
-                    <input class="toggle" type="checkbox" checked=entry.completed onclick=self.link.callback(move |_| Msg::Toggle(idx)) />
-                    <label ondblclick=self.link.callback(move |_| Msg::ToggleEdit(idx))>{ &entry.description }</label>
-                    <button class="destroy" onclick=self.link.callback(move |_| Msg::Remove(idx)) />
-                </div>
-                { self.view_entry_edit_input((&idx, &entry)) }
-            </li>
-        }
-    }
-
-    fn view_entry_edit_input(&self, (idx, entry): (&usize, &Entry)) -> Html {
-        let idx = *idx;
-        if entry.editing {
-            html! {
-                <input class="edit"
-                       type="text"
-                       value=&entry.description
-                       oninput=self.link.callback(move |e: InputData| Msg::UpdateEdit(e.value))
-                       onblur=self.link.callback(move |_| Msg::Edit(idx))
-                       onkeypress=self.link.callback(move |e: KeyboardEvent| {
-                          if e.key() == "Enter" { Msg::Edit(idx) } else { Msg::Nope }
-                       }) />
-            }
+        let classes_main_left = if self.state.hide_chat_mobile_view {
+            "main__left"
         } else {
-            html! { <input type="hidden" /> }
-        }
-    }
-}
-
-#[derive(EnumIter, ToString, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Filter {
-    All,
-    Active,
-    Completed,
-}
-
-impl<'a> Into<Href> for &'a Filter {
-    fn into(self) -> Href {
-        match *self {
-            Filter::All => "#/".into(),
-            Filter::Active => "#/active".into(),
-            Filter::Completed => "#/completed".into(),
-        }
-    }
-}
-
-impl Filter {
-    fn fit(&self, entry: &Entry) -> bool {
-        match *self {
-            Filter::All => true,
-            Filter::Active => !entry.completed,
-            Filter::Completed => entry.completed,
-        }
-    }
-}
-
-impl State {
-    fn total(&self) -> usize {
-        self.entries.len()
-    }
-
-    fn total_completed(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| Filter::Completed.fit(e))
-            .count()
-    }
-
-    fn is_all_completed(&self) -> bool {
-        let mut filtered_iter = self
-            .entries
-            .iter()
-            .filter(|e| self.filter.fit(e))
-            .peekable();
-
-        if filtered_iter.peek().is_none() {
-            return false;
-        }
-
-        filtered_iter.all(|e| e.completed)
-    }
-
-    fn toggle_all(&mut self, value: bool) {
-        for entry in self.entries.iter_mut() {
-            if self.filter.fit(entry) {
-                entry.completed = value;
-            }
-        }
-    }
-
-    fn clear_completed(&mut self) {
-        let entries = self
-            .entries
-            .drain(..)
-            .filter(|e| Filter::Active.fit(e))
-            .collect();
-        self.entries = entries;
-    }
-
-    fn toggle(&mut self, idx: usize) {
-        let filter = self.filter.clone();
-        let mut entries = self
-            .entries
-            .iter_mut()
-            .filter(|e| filter.fit(e))
-            .collect::<Vec<_>>();
-        let entry = entries.get_mut(idx).unwrap();
-        entry.completed = !entry.completed;
-    }
-
-    fn toggle_edit(&mut self, idx: usize) {
-        let filter = self.filter.clone();
-        let mut entries = self
-            .entries
-            .iter_mut()
-            .filter(|e| filter.fit(e))
-            .collect::<Vec<_>>();
-        let entry = entries.get_mut(idx).unwrap();
-        entry.editing = !entry.editing;
-    }
-
-    fn complete_edit(&mut self, idx: usize, val: String) {
-        let filter = self.filter.clone();
-        let mut entries = self
-            .entries
-            .iter_mut()
-            .filter(|e| filter.fit(e))
-            .collect::<Vec<_>>();
-        let entry = entries.get_mut(idx).unwrap();
-        entry.description = val;
-        entry.editing = !entry.editing;
-    }
-
-    fn remove(&mut self, idx: usize) {
-        let idx = {
-            let filter = self.filter.clone();
-            let entries = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|&(_, e)| filter.fit(e))
-                .collect::<Vec<_>>();
-            let &(idx, _) = entries.get(idx).unwrap();
-            idx
+            "main__left disable"
         };
-        self.entries.remove(idx);
+        let classes_main_right = if self.state.hide_chat_mobile_view {
+            "main__right"
+        } else {
+            "main__right disable"
+        };
+        let classes_header_back = if self.state.hide_chat_mobile_view {
+            "header__back"
+        } else {
+            "header__back disable"
+        };
+        let classes_mic = if self.state.enable_mic {
+            "fa fa-microphone"
+        } else {
+            "fa fa-microphone-slash background__red"
+        };
+        let classes_button_mic = if self.state.enable_mic {
+            "options__button"
+        } else {
+            "options__button background__red"
+        };
+        let classes_camera = if self.state.enable_camera {
+            "fa fa-video-camera"
+        } else {
+            "fa fa-video-slash background__red"
+        };
+        let classes_button_camera = if self.state.enable_camera {
+            "options__button"
+        } else {
+            "options__button background__red"
+        };
+
+        html! {
+          <div>
+            <div class="header">
+              <div class="logo">
+                <div class=classes_header_back onclick=self.link.callback(|_| {Msg::HideChat})>
+                  <i class="fas fa-angle-left" />
+                </div>
+                <h2>{"Video Chat"}</h2>
+              </div>
+            </div>
+            <div class="main">
+            <div class=classes_main_left>
+              <div class="videos__group">
+                <div id="video-grid" />
+              </div>
+              <div class="options">
+                <div class="options__left">
+                  <div id="stopVideo" class=classes_button_camera onclick=self.link.callback(|_| {Msg::ToggleCamera})>
+                    <i class=classes_camera />
+                  </div>
+                  <div id="muteButton" class=classes_button_mic onclick=self.link.callback(|_| {Msg::ToggleMic})>
+                    <i class=classes_mic />
+                  </div>
+                  <div id="showChat" class="options__button" onclick=self.link.callback(|_| Msg::OpenChat)>
+                    <i class="fa fa-comment" />
+                  </div>
+                </div>
+                <div class="options__right">
+                  <div id="inviteButton" class="options__button" onclick=self.link.callback(|_| {Msg::InviteUser})>
+                    <i class="fas fa-user-plus" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class=classes_main_right>
+              <div class="main__chat_window">
+                  <div class="messages" />
+              </div>
+              <div class="main__message_container">
+                <input id="chat_message" type="text" autocomplete="off" placeholder="Type message here..." />
+                <div id="send" class="options__button">
+                  <i class="fa fa-plus" aria-hidden="true" />
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        }
     }
+}
+
+fn document() -> Document {
+    window().unwrap().document().expect("Document unavailable")
+}
+
+fn location() -> Location {
+    document().location().expect("Location unavailable")
 }
